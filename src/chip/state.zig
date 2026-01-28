@@ -2,12 +2,12 @@
 //! treats the chip as a finite state machine. Any instruction executed by the emulator
 //! will alter the state memory, stack and registers
 
-const StackError = error{
+const std = @import("std");
+
+pub const StackError = error{
     StackUnderflow,
     StackOverflow,
 };
-
-const std = @import("std");
 
 pub const memory_size = 4096;
 pub const display_width = 32;
