@@ -46,7 +46,7 @@ const ClearOrReturn = struct {
     fn execute(self: Self) InstructionFault!void {
         switch (self.nnn) {
             0x0E0 => {
-                @memset(&self.state.display, [_]bool{false} ** 32);
+                @memset(&self.state.display, [_]bool{false} ** State.display_width);
             },
             0x0EE => {
                 const addr = try self.state.popStack();

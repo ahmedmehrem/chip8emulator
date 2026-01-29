@@ -10,8 +10,8 @@ pub const StackError = error{
 };
 
 pub const memory_size = 4096;
-pub const display_width = 32;
-pub const display_height = 64;
+pub const display_width = 64;
+pub const display_height = 32;
 pub const stack_size = 16;
 
 /// the font bytes stored from 0x50 to 0x9F
@@ -56,7 +56,7 @@ const Self = @This();
 pub fn init() Self {
     var state: Self = .{
         .memory = [_]u8{0} ** 4096,
-        .display = [_][32]bool{[_]bool{false} ** 32} ** 64,
+        .display = [_][display_width]bool{[_]bool{false} ** display_width} ** display_height,
         .pc = 0x200,
         .I = 0x0,
         .stack = [_]u12{0} ** 16,
