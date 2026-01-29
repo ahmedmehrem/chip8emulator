@@ -328,6 +328,7 @@ const SetI = struct {
     }
 };
 
+/// 0xBNNN: jump to a certain address plus an offset
 const JumpWithOffset = struct {
     nnn: u12,
     state: *State,
@@ -346,6 +347,7 @@ const JumpWithOffset = struct {
     }
 };
 
+/// 0xCXNN: generate random bytes
 const RandomByte = struct {
     x: u4,
     nn: u8,
@@ -371,6 +373,7 @@ const RandomByte = struct {
     }
 };
 
+/// 0xDXYN: draw a sprite on the display
 const DrawSprite = struct {
     state: *State,
     x: u4,
