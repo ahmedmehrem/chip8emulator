@@ -371,6 +371,56 @@ const RandomByte = struct {
     }
 };
 
+const DrawSprite = struct {
+    state: *State,
+    x: u4,
+    y: u4,
+    n: u4,
+
+    const Self = @This();
+
+    pub fn init(b1: u8, b2: u8, state: *State) Self {
+        const x, const y, const n = xyn(b1, b2);
+        // zig fmt: off
+        return .{
+            .state = state,
+            .x = x,
+            .y = y,
+            .n = n
+        };
+        // zig fmt: on
+    }
+
+    pub fn execute(self: Self) InstructionFault!void {
+        const x = self.state.V[self.x] & 63;
+        const y = self.state.V[self.y] & 31;
+
+        const num_rows = self.n;
+
+        for (0..num_rows) |row| {
+            if (row + y == State.display_height) {
+                break;
+            }
+            var row_pixels = self.state.memory[self.state.I + row];
+
+            for (0..8) |col| {
+                if (col + x >= State.display_width) {
+                    continue;
+                }
+                const display_pixel: *bool = &self.state.display[row + y][col + x];
+                const new_pixel = (row_pixels & 0x80) != 0;
+                row_pixels <<= 1;
+
+                if (display_pixel.* and new_pixel) {
+                    self.state.V[0xF] = 0x1;
+                }
+
+                display_pixel.* ^= new_pixel;
+            }
+        }
+    }
+};
+
 const Instruction = union(enum) {
     clear_or_return: ClearOrReturn,
     jump: Jump,
@@ -385,6 +435,7 @@ const Instruction = union(enum) {
     set_i: SetI,
     jump_with_offset: JumpWithOffset,
     random_byte: RandomByte,
+    draw_sprite: DrawSprite,
 
     const Self = @This();
 
@@ -1001,5 +1052,102 @@ test "instruction 0xCXNN" {
     while (it.next()) |elem| {
         const x = elem.value_ptr.*;
         try std.testing.expect(x > lower_threshold and x < top_threshold);
+    }
+}
+
+fn spirte_to_bytes(comptime height: u4, comptime sprite: [height][8]bool) [height]u8 {
+    var bytes: [height]u8 = undefined;
+
+    inline for (0..height) |i| {
+        var byte: u8 = 0;
+        inline for (0..8) |j| {
+            byte |= @as(u8, @intFromBool(sprite[i][j])) << j;
+        }
+        bytes[i] = byte;
+    }
+
+    return bytes;
+}
+
+test "instruction 0xDXYN" {
+    var state = State.init();
+
+    const sprite = [_][8]bool{
+        .{ true, true, true, true, true, true, true, true }, // ..XXXX..
+        .{ true, false, false, false, false, false, false, true }, // .X....X.
+        .{ true, false, true, true, true, true, false, true }, // X.XXXX.X
+        .{ true, false, true, false, false, true, false, true }, // X.X..X.X
+        .{ true, false, true, false, false, true, false, true }, // X.X..X.X
+        .{ true, false, true, true, true, true, false, true }, // X.XXXX.X
+        .{ true, false, false, false, false, false, false, true }, // .X....X.
+        .{ true, true, true, true, true, true, true, true }, // ..XXXX..
+    };
+
+    const sprite_addr = 0x100;
+    const sprite_bytes = comptime spirte_to_bytes(sprite.len, sprite);
+    @memcpy(state.memory[sprite_addr .. sprite_addr + sprite.len], &sprite_bytes);
+
+    // draw the sprite
+    const x1: u8 = 32;
+    const y1: u8 = 14;
+
+    const register1: u4 = 0x3;
+    const register2: u4 = 0x7;
+
+    state.V[register1] = x1;
+    state.V[register2] = y1;
+    state.I = sprite_addr;
+
+    const num_rows: u4 = sprite.len;
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xB0 | @as(u8, register1),
+        @as(u8, register2) << 4 | @as(u8, num_rows)
+    };
+    // zig fmt: on
+    const instruction = Instruction{ .draw_sprite = DrawSprite.init(code[0], code[1], &state) };
+    try instruction.execute();
+
+    // check for the display pixels are rendered correctly
+    for (0..sprite.len) |i| {
+        try std.testing.expectEqualSlices(bool, &sprite[i], state.display[y1 + i][x1 .. x1 + 8]);
+    }
+
+    // render the same sprite again but clipped by the right edge of the display
+    const x2: u8 = 59;
+    const y2: u8 = 9;
+
+    state.V[register1] = x2;
+    state.V[register2] = y2;
+
+    try instruction.execute();
+
+    for (0..sprite.len) |i| {
+        if (y2 + i > State.display_height) {
+            break;
+        }
+        try std.testing.expectEqualSlices(bool, sprite[i][0..@min(State.display_width - x2, 8)], state.display[y2 + i][x2..@min(x2 + 8, State.display_width)]);
+    }
+
+    // render the sprite a third time but intersecting with the first rendered sprite pixels
+    const x3: u8 = 36;
+    const y3: u8 = 18;
+
+    state.V[register1] = x3;
+    state.V[register2] = y3;
+
+    try instruction.execute();
+
+    // zig fmt: off
+    const overlap_pixels = [_][4]bool{
+        .{ true, false, true, false },
+        .{ false, true, false, true },
+        .{ true, false, true, false },
+        .{ false, true, false, true } 
+    };
+    // zig fmt: on
+    for (0..overlap_pixels.len) |i| {
+        try std.testing.expectEqualSlices(bool, &overlap_pixels[i], state.display[y3 + i][x3 .. x3 + overlap_pixels[0].len]);
     }
 }
