@@ -50,6 +50,8 @@ delay_timer: u8,
 sound_timer: u8,
 /// the chip 16 registers
 V: [16]u8,
+/// the hexadecimal input keys
+keys: [16]bool,
 
 const Self = @This();
 
@@ -64,6 +66,7 @@ pub fn init() Self {
         .delay_timer = 0,
         .sound_timer = 0,
         .V = [_]u8{0} ** 16,
+        .keys = [_]bool{false} ** 16,
     };
 
     @memcpy(state.memory[0x50 .. 0x50 + font.len], &font);
