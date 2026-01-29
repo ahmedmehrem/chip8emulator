@@ -424,6 +424,47 @@ const DrawSprite = struct {
     }
 };
 
+/// 0xEX9E: skip instruction if key (x) is pressed
+/// 0xEXA1: skip instruction if key (x) is not pressed
+/// the instruction doesn't wait for the key state change
+const CheckKey = struct {
+    state: *State,
+    x: u4,
+    nn: u8,
+
+    const Self = @This();
+
+    pub fn init(b1: u8, b2: u8, state: *State) Self {
+        const x, const nn = xnn(b1, b2);
+        // zig fmt: off
+        return .{
+            .state = state,
+            .x = x,
+            .nn = nn
+        };
+        // zig fmt: on
+    }
+
+    pub fn execute(self: Self) InstructionFault!void {
+        const key = self.state.V[self.x];
+        switch (self.nn) {
+            0x9E => {
+                if (self.state.keys[key]) {
+                    skipInstruction(self.state);
+                }
+            },
+            0xA1 => {
+                if (!self.state.keys[key]) {
+                    skipInstruction(self.state);
+                }
+            },
+            else => {
+                return error.IllegalInstruction;
+            },
+        }
+    }
+};
+
 const Instruction = union(enum) {
     clear_or_return: ClearOrReturn,
     jump: Jump,
@@ -439,6 +480,7 @@ const Instruction = union(enum) {
     jump_with_offset: JumpWithOffset,
     random_byte: RandomByte,
     draw_sprite: DrawSprite,
+    check_key: CheckKey,
 
     const Self = @This();
 
@@ -1153,4 +1195,42 @@ test "instruction 0xDXYN" {
     for (0..overlap_pixels.len) |i| {
         try std.testing.expectEqualSlices(bool, &overlap_pixels[i], state.display[y3 + i][x3 .. x3 + overlap_pixels[0].len]);
     }
+}
+
+test "0xEX9E - 0xEXA1: check for key state(no waiting)" {
+    var state = State.init();
+
+    const key: u4 = 0xA;
+    const register: u4 = 0x6;
+    const pc = 0x100;
+
+    state.keys[key] = true;
+    state.V[register] = key;
+    state.pc = pc;
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xE0 | @as(u8, register),
+        0x9E
+    };
+    // zig fmt: on
+    const instruction = Instruction{ .check_key = CheckKey.init(code[0], code[1], &state) };
+    try instruction.execute();
+
+    try std.testing.expectEqual(pc + 2, state.pc);
+
+    state.keys[key] = false;
+    state.pc = pc;
+
+    // zig fmt: off
+    const code2 = [2]u8{
+        0xE0 | @as(u8, register),
+        0xA1
+    };
+    // zig fmt: on
+
+    const instruction2 = Instruction{ .check_key = CheckKey.init(code2[0], code2[1], &state) };
+    try instruction2.execute();
+
+    try std.testing.expectEqual(pc + 2, state.pc);
 }
