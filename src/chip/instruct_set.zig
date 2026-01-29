@@ -231,7 +231,13 @@ const AddValue = struct {
     const Self = @This();
 
     pub fn init(x: u4, nn: u8, state: *State) Self {
-        return .{ .x = x, .nn = nn, .state = state };
+        // zig fmt: off
+        return .{ 
+            .x = x,
+            .nn = nn,
+            .state = state 
+        };
+        // zig fmt: on
     }
 
     pub fn execute(self: Self) InstructionFault!void {
@@ -340,6 +346,31 @@ const JumpWithOffset = struct {
     }
 };
 
+const RandomByte = struct {
+    x: u4,
+    nn: u8,
+    random: *const std.Random,
+    state: *State,
+
+    const Self = @This();
+
+    pub fn init(b1: u8, b2: u8, random: *const std.Random, state: *State) Self {
+        const x, const nn = xnn(b1, b2);
+        // zig fmt: off
+        return .{
+            .x = x,
+            .nn = nn,
+            .random = random,
+            .state = state,
+        };
+        // zig fmt: on
+    }
+
+    pub fn execute(self: Self) InstructionFault!void {
+        self.state.V[self.x] = self.nn & self.random.int(u8);
+    }
+};
+
 const Instruction = union(enum) {
     clear_or_return: ClearOrReturn,
     jump: Jump,
@@ -353,6 +384,7 @@ const Instruction = union(enum) {
     arthmetic_logic: ArithmeticLogic,
     set_i: SetI,
     jump_with_offset: JumpWithOffset,
+    random_byte: RandomByte,
 
     const Self = @This();
 
@@ -919,4 +951,55 @@ test "instruction 0xBNNN" {
     const instruction = Instruction{ .jump_with_offset = JumpWithOffset.init(code[0], code[1], &state) };
     try instruction.execute();
     try std.testing.expectEqual(address + offset, state.pc);
+}
+
+test "instruction 0xCXNN" {
+    var state = State.init();
+
+    const register: u4 = 0x5;
+    const mask: u8 = 0xFF;
+
+    state.V[register] = mask;
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xB0 | @as(u8, register),
+        mask
+    };
+    // zig fmt: on
+
+    var engine: std.Random.DefaultPrng = .init(blk: {
+        var buffer: [8]u8 = undefined;
+        try std.posix.getrandom(&buffer);
+        break :blk @as(u64, @bitCast(buffer));
+    });
+
+    const instruction = Instruction{ .random_byte = RandomByte.init(code[0], code[1], &engine.random(), &state) };
+
+    const num_samples = 100_000;
+
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+
+    const allocator = gpa.allocator();
+
+    var frequencies: std.AutoHashMap(u8, u32) = .init(allocator);
+    defer frequencies.deinit();
+
+    for (0..num_samples) |_| {
+        try instruction.execute();
+        const res = try frequencies.getOrPut(state.V[register]);
+        if (res.found_existing) res.value_ptr.* += 1 else res.value_ptr.* = 0;
+    }
+
+    const average_freq: f64 = num_samples / std.math.maxInt(u8);
+    const top_threshold: u64 = @intFromFloat(1.2 * average_freq);
+    const lower_threshold: u64 = @intFromFloat(0.8 * average_freq);
+
+    var it = frequencies.iterator();
+
+    while (it.next()) |elem| {
+        const x = elem.value_ptr.*;
+        try std.testing.expect(x > lower_threshold and x < top_threshold);
+    }
 }
