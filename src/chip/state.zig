@@ -13,8 +13,9 @@ pub const memory_size = 4096;
 pub const display_width = 64;
 pub const display_height = 32;
 pub const stack_size = 16;
+pub const font_offset = 0x050;
 
-/// the font bytes stored from 0x50 to 0x9F
+/// the font bytes stored from font_offset to 0x9F
 pub const font = [_]u8{
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
     0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -69,7 +70,7 @@ pub fn init() Self {
         .keys = [_]bool{false} ** 16,
     };
 
-    @memcpy(state.memory[0x50 .. 0x50 + font.len], &font);
+    @memcpy(state.memory[font_offset .. font_offset + font.len], &font);
 
     return state;
 }
@@ -97,7 +98,7 @@ pub fn pushToStack(self: *Self, addr: u12) StackError!void {
 test "chip-8 initial state" {
     const state = Self.init();
 
-    try std.testing.expectEqualSlices(u8, &font, state.memory[0x50 .. 0x50 + font.len]);
+    try std.testing.expectEqualSlices(u8, &font, state.memory[font_offset .. font_offset + font.len]);
     try std.testing.expectEqual(0x200, state.pc);
 }
 
