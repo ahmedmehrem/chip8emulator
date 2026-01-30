@@ -465,6 +465,91 @@ const CheckKey = struct {
     }
 };
 
+/// 0xFXNN: for controlling timers, getting font characters
+/// and dumping and loading registers
+const InputOutput = struct {
+    state: *State,
+    x: u4,
+    nn: u8,
+
+    const Self = @This();
+
+    pub fn init(b1: u8, b2: u8, state: *State) Self {
+        const x, const nn = xnn(b1, b2);
+        return .{
+            .state = state,
+            .x = x,
+            .nn = nn,
+        };
+    }
+
+    pub fn execute(self: Self) InstructionFault!void {
+        switch (self.nn) {
+            0x07 => {
+                self.state.V[self.x] = self.state.delay_timer;
+            },
+            0x15 => {
+                self.state.delay_timer = self.state.V[self.x];
+            },
+            0x18 => {
+                self.state.sound_timer = self.state.V[self.x];
+            },
+            0x1E => {
+                self.state.I += self.state.V[self.x];
+            },
+            0x0A => {
+                const key = self.state.V[self.x];
+                // reset pc to the previous instruction
+                // and loop till the key is pressed
+                if (!self.state.keys[key]) {
+                    self.state.pc -= 2;
+                }
+            },
+            0x29 => {
+                const key = self.state.V[self.x];
+                self.state.I = State.font_offset + key * 5;
+            },
+            0x33 => {
+                const val = self.state.V[self.x];
+
+                const d1 = val / 100;
+                const d2 = (val % 100) / 10;
+                const d3 = val % 10;
+
+                const i = self.state.I;
+
+                self.state.memory[i] = d1;
+                self.state.memory[i + 1] = d2;
+                self.state.memory[i + 2] = d3;
+            },
+            0x55 => {
+                const n = self.state.V[self.x];
+
+                const addr = self.state.I;
+
+                if (n >= 16) {
+                    return error.IllegalInstruction;
+                }
+
+                for (0..n + 1) |i| {
+                    self.state.memory[addr + i] = self.state.V[i];
+                }
+            },
+            0x65 => {
+                const n = self.state.V[self.x];
+                const addr = self.state.I;
+
+                for (0..n + 1) |i| {
+                    self.state.V[i] = self.state.memory[addr + i];
+                }
+            },
+            else => {
+                return error.IllegalInstruction;
+            },
+        }
+    }
+};
+
 const Instruction = union(enum) {
     clear_or_return: ClearOrReturn,
     jump: Jump,
@@ -481,6 +566,7 @@ const Instruction = union(enum) {
     random_byte: RandomByte,
     draw_sprite: DrawSprite,
     check_key: CheckKey,
+    input_output: InputOutput,
 
     const Self = @This();
 
@@ -1233,4 +1319,237 @@ test "0xEX9E - 0xEXA1: check for key state(no waiting)" {
     try instruction2.execute();
 
     try std.testing.expectEqual(pc + 2, state.pc);
+}
+
+test "0xFX07: to get the value of the delay timer" {
+    var state = State.init();
+
+    const register: u4 = 0x4;
+    const timer_value = 0xAA;
+
+    state.delay_timer = timer_value;
+    // zig fmt: off
+    const code = [2]u8{
+        0xF0 | @as(u8, register),
+        0x07
+    };
+    // zig fmt: on
+
+    const instruction = Instruction{ .input_output = InputOutput.init(code[0], code[1], &state) };
+    try instruction.execute();
+
+    try std.testing.expectEqual(state.delay_timer, state.V[register]);
+}
+
+test "0xFX15: set the value of the delay timer" {
+    var state = State.init();
+
+    const register: u4 = 0x4;
+    const timer_value = 0xAA;
+    state.V[register] = timer_value;
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xF0 | @as(u8, register),
+        0x15
+    };
+    // zig fmt: on
+
+    const instruction = Instruction{ .input_output = InputOutput.init(code[0], code[1], &state) };
+    try instruction.execute();
+
+    try std.testing.expectEqual(state.V[register], state.delay_timer);
+}
+
+test "0xFX18: set the value of the sound timer" {
+    var state = State.init();
+
+    const register: u4 = 0x4;
+    const timer_value = 0xAA;
+    state.V[register] = timer_value;
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xF0 | @as(u8, register),
+        0x18
+    };
+    // zig fmt: on
+
+    const instruction = Instruction{ .input_output = InputOutput.init(code[0], code[1], &state) };
+    try instruction.execute();
+
+    try std.testing.expectEqual(state.V[register], state.sound_timer);
+}
+
+test "0xFX1E: add register value to the I register" {
+    var state = State.init();
+
+    const register: u4 = 0xB;
+    const addr = 0xAAA;
+    const offset = 0xCC;
+
+    state.V[register] = offset;
+    state.I = addr;
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xF0 | @as(u8, register),
+        0x1E
+    };
+    // zig fmt: on
+
+    const instruction = Instruction{ .input_output = InputOutput.init(code[0], code[1], &state) };
+    try instruction.execute();
+
+    try std.testing.expectEqual(addr + offset, state.I);
+}
+
+test "0xFX0A: wait until a key is pressed" {
+    var state = State.init();
+
+    const register: u4 = 0x3;
+    const key: u4 = 0xA;
+    state.V[register] = key;
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xF0 | @as(u8, register),
+        0x0A
+    };
+    // zig fmt: on
+    const pc = 0x100;
+    state.pc = pc;
+
+    const instruction = Instruction{ .input_output = InputOutput.init(code[0], code[1], &state) };
+
+    try instruction.execute();
+    try std.testing.expectEqual(pc - 2, state.pc);
+    skipInstruction(&state);
+
+    try instruction.execute();
+    try std.testing.expectEqual(pc - 2, state.pc);
+    skipInstruction(&state);
+
+    state.keys[key] = true;
+    try instruction.execute();
+    try std.testing.expectEqual(pc, state.pc);
+}
+
+test "0xFX29: get the address of a hexademical font character" {
+    var state = State.init();
+
+    const register: u4 = 0x7;
+    const character: u8 = 0xA;
+
+    const address = State.font_offset + character * 5;
+    state.V[register] = character;
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xF0 | @as(u8, register),
+        0x29
+    };
+    // zig fmt: on
+
+    const instruction = Instruction{ .input_output = InputOutput.init(code[0], code[1], &state) };
+    try instruction.execute();
+
+    try std.testing.expectEqual(address, state.I);
+}
+
+test "0xFX33: convert a byte to decimal" {
+    var state = State.init();
+
+    const register: u4 = 0x8;
+    const number: u8 = 123;
+    const address: u12 = 0x100;
+
+    state.V[register] = number;
+    state.I = address;
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xF0 | @as(u8, register),
+        0x33
+    };
+    // zig fmt: on
+
+    const instruction = Instruction{ .input_output = InputOutput.init(code[0], code[1], &state) };
+    try instruction.execute();
+
+    try std.testing.expectEqual(number / 100, state.memory[state.I]);
+    try std.testing.expectEqual((number % 100) / 10, state.memory[state.I + 1]);
+    try std.testing.expectEqual(number % 10, state.memory[state.I + 2]);
+}
+
+test "0xFX55: dump registers into memory" {
+    var state = State.init();
+
+    const num_registers: u4 = 0xA;
+    const register: u4 = num_registers + 1;
+    const address: u12 = 0x100;
+
+    state.V[register] = num_registers - 1;
+    state.I = address;
+
+    var values: [num_registers]u8 = undefined;
+
+    state.V[register] = num_registers - 1;
+    state.I = address;
+
+    try std.posix.getrandom(&values);
+
+    for (0..num_registers) |i| {
+        state.V[i] = values[i];
+    }
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xF0 | @as(u8, register),
+        0x55
+    };
+    // zig fmt: on
+
+    const instruction = Instruction{ .input_output = InputOutput.init(code[0], code[1], &state) };
+    try instruction.execute();
+
+    for (0..num_registers) |i| {
+        try std.testing.expectEqual(state.V[i], state.memory[state.I + i]);
+    }
+}
+
+test "0xFX65: dump registers into memory" {
+    var state = State.init();
+
+    const num_registers: u4 = 0xA;
+    const register: u4 = num_registers + 1;
+    const address: u12 = 0x100;
+
+    state.V[register] = num_registers - 1;
+    state.I = address;
+
+    var values: [num_registers]u8 = undefined;
+
+    state.V[register] = num_registers - 1;
+    state.I = address;
+
+    try std.posix.getrandom(&values);
+
+    for (0..num_registers) |i| {
+        state.memory[address + i] = values[i];
+    }
+
+    // zig fmt: off
+    const code = [2]u8{
+        0xF0 | @as(u8, register),
+        0x65
+    };
+    // zig fmt: on
+
+    const instruction = Instruction{ .input_output = InputOutput.init(code[0], code[1], &state) };
+    try instruction.execute();
+
+    for (0..num_registers) |i| {
+        try std.testing.expectEqual(state.V[i], state.memory[state.I + i]);
+    }
 }
